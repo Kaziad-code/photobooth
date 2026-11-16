@@ -1,0 +1,1861 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>K-Photobooth Studio - Chụp Cử Chỉ & Tự Động In</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Caveat:wght@700&family=Playfair+Display:ital,wght@0,700;1,700&family=VT323&display=swap" rel="stylesheet">
+    <!-- MediaPipe Hands & Drawing Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #09090b;
+            color: #fafafa;
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Lật gương camera trước cho tự nhiên */
+        .mirror-canvas {
+            transform: scaleX(-1);
+        }
+
+        /* Hiệu ứng đèn flash chụp ảnh */
+        @keyframes flashAnim {
+            0% { opacity: 0.95; }
+            100% { opacity: 0; }
+        }
+        .flash-effect {
+            animation: flashAnim 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+
+        /* Hiệu ứng đẩy ảnh từ khe máy in */
+        @keyframes printSlideOut {
+            0% {
+                transform: translateY(-75%);
+                opacity: 0.3;
+            }
+            100% {
+                transform: translateY(0%);
+                opacity: 1;
+            }
+        }
+        .printing-slide {
+            animation: printSlideOut 2.2s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+        }
+
+        /* Thanh cuộn gọn đẹp */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(24, 24, 27, 0.6);
+            border-radius: 99px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(161, 161, 170, 0.4);
+            border-radius: 99px;
+        }
+
+        /* Cấu hình in ấn chuẩn xác: Chỉ in tấm ảnh Photobooth */
+        @media print {
+            body * {
+                visibility: hidden !important;
+            }
+            #print-area, #print-area * {
+                visibility: visible !important;
+            }
+            #print-area {
+                position: fixed !important;
+                left: 50% !important;
+                top: 50% !important;
+                transform: translate(-50%, -50%) !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                box-shadow: none !important;
+                border: none !important;
+                background: transparent !important;
+            }
+            #final-print-img {
+                max-height: 95vh !important;
+                max-width: 95vw !important;
+                width: auto !important;
+                height: auto !important;
+                object-fit: contain !important;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-gradient-to-b from-zinc-950 via-zinc-900 to-black text-zinc-100 select-none">
+
+    <!-- Hiệu ứng Flash & Đếm ngược toàn màn hình -->
+    <div id="flash-overlay" class="fixed inset-0 bg-white pointer-events-none opacity-0 z-50"></div>
+    <div id="countdown-overlay" class="fixed inset-0 pointer-events-none flex items-center justify-center z-40 hidden">
+        <div id="countdown-number" class="text-8xl sm:text-9xl font-black text-white drop-shadow-[0_10px_25px_rgba(236,72,153,0.9)] animate-bounce">3</div>
+    </div>
+
+    <!-- Hộp thông báo Toast (thay thế hoàn toàn alert) -->
+    <div id="toast-box" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-all duration-300 opacity-0 translate-y-4">
+        <div id="toast-msg" class="px-5 py-2.5 rounded-full bg-zinc-900/95 border border-pink-500/50 text-white text-xs sm:text-sm font-semibold shadow-2xl backdrop-blur-md"></div>
+    </div>
+
+    <!-- Header Điều hướng 4 Bước -->
+    <header class="sticky top-0 z-30 bg-zinc-950/85 backdrop-blur-lg border-b border-zinc-800/80 px-3 sm:px-6 py-3">
+        <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 via-rose-500 to-amber-400 flex items-center justify-center font-black text-white shadow-lg shadow-pink-500/20">
+                    ✌️
+                </div>
+                <div>
+                    <h1 class="text-sm sm:text-base font-extrabold tracking-tight bg-gradient-to-r from-white via-pink-200 to-pink-400 bg-clip-text text-transparent">
+                        K-PHOTOBOOTH STUDIO
+                    </h1>
+                    <p class="text-[10px] sm:text-xs text-zinc-400">Chụp cử chỉ 2 ngón tay • 20 khung hot trend • Tự động in</p>
+                </div>
+            </div>
+
+            <!-- Thanh tiến trình 4 bước -->
+            <nav class="flex items-center gap-1 sm:gap-2 text-[11px] sm:text-xs font-bold">
+                <button type="button" onclick="goToStep(1)" id="nav-step-1" class="px-2.5 py-1.5 rounded-full bg-pink-600 text-white transition">1. Khung</button>
+                <span class="text-zinc-600">›</span>
+                <button type="button" onclick="goToStep(2)" id="nav-step-2" class="px-2.5 py-1.5 rounded-full bg-zinc-800 text-zinc-400 transition">2. Chụp ✌️</button>
+                <span class="text-zinc-600">›</span>
+                <button type="button" onclick="goToStep(3)" id="nav-step-3" class="px-2.5 py-1.5 rounded-full bg-zinc-800 text-zinc-400 transition">3. Trang trí</button>
+                <span class="text-zinc-600">›</span>
+                <button type="button" onclick="goToStep(4)" id="nav-step-4" class="px-2.5 py-1.5 rounded-full bg-zinc-800 text-zinc-400 transition">4. In ảnh</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Nội dung chính -->
+    <main class="flex-1 max-w-6xl w-full mx-auto p-3 sm:p-6">
+
+        <!-- ==================== BƯỚC 1: THIẾT LẬP KHUNG PHOTOBOOTH ==================== -->
+        <section id="step-1" class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <!-- Cột trái: Tùy chọn cấu hình -->
+            <div class="lg:col-span-7 bg-zinc-900/80 border border-zinc-800 rounded-3xl p-4 sm:p-6 space-y-5 shadow-xl">
+                <div>
+                    <span class="inline-block px-3 py-1 rounded-full bg-pink-500/15 text-pink-400 text-xs font-bold mb-1">BƯỚC 1 / 4</span>
+                    <h2 class="text-lg sm:text-xl font-extrabold">Thiết kế khung Photobooth của bạn</h2>
+                </div>
+
+                <!-- 1. Chọn Bố cục -->
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-400 mb-2">1. Chọn kiểu bố cục (Layout)</label>
+                    <div class="grid grid-cols-3 gap-2.5">
+                        <button type="button" onclick="setLayout('strip4', this)" class="layout-btn active ring-2 ring-pink-500 bg-zinc-800 p-3 rounded-2xl border border-zinc-700 text-left transition">
+                            <div class="font-bold text-xs sm:text-sm text-white">Strip 1×4</div>
+                            <div class="text-[11px] text-zinc-400">4 tấm dọc chuẩn Hàn</div>
+                        </button>
+                        <button type="button" onclick="setLayout('grid2x2', this)" class="layout-btn bg-zinc-800/40 p-3 rounded-2xl border border-zinc-800 text-left transition">
+                            <div class="font-bold text-xs sm:text-sm text-zinc-200">Lưới 2×2</div>
+                            <div class="text-[11px] text-zinc-400">4 tấm vuông cổ điển</div>
+                        </button>
+                        <button type="button" onclick="setLayout('wide2', this)" class="layout-btn bg-zinc-800/40 p-3 rounded-2xl border border-zinc-800 text-left transition">
+                            <div class="font-bold text-xs sm:text-sm text-zinc-200">Khung 2 tấm</div>
+                            <div class="text-[11px] text-zinc-400">2 khung lớn sắc nét</div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. Bộ sưu tập 20 mẫu khung hot trend -->
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-xs font-semibold text-zinc-400">2. Bộ sưu tập 20 mẫu khung hot trend</label>
+                        <span class="text-[11px] text-pink-400 font-medium">Cuộn để xem đủ 20 mẫu</span>
+                    </div>
+                    <div class="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-64 overflow-y-auto pr-1" id="theme-grid">
+                        <!-- Nhóm Cơ bản & Hàn Quốc -->
+                        <button type="button" onclick="setTheme('white', this)" class="theme-btn active ring-2 ring-pink-500 p-2 rounded-xl bg-zinc-800/80 border border-zinc-700 flex flex-col items-center gap-1 text-[11px] font-semibold">
+                            <span class="w-6 h-6 rounded-full bg-white border border-zinc-400 shadow-inner"></span> Trắng Studio
+                        </button>
+                        <button type="button" onclick="setTheme('black', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-zinc-950 border border-zinc-600"></span> Đen Photoism
+                        </button>
+                        <button type="button" onclick="setTheme('haru', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-sky-200 border border-sky-400"></span> Haru Xanh
+                        </button>
+                        <button type="button" onclick="setTheme('dontlookup', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-red-600 border border-red-300"></span> Đỏ High-Angle
+                        </button>
+
+                        <!-- Nhóm Trend Mạng Xã Hội -->
+                        <button type="button" onclick="setTheme('receipt', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-stone-100 border border-dashed border-zinc-500 flex items-center justify-center text-[9px] text-zinc-800 font-mono">$$</span> Hóa Đơn Bill
+                        </button>
+                        <button type="button" onclick="setTheme('chrome', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-gradient-to-tr from-zinc-400 via-white to-slate-500 border border-white"></span> Y2K Bạc Chrome
+                        </button>
+                        <button type="button" onclick="setTheme('coquette', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-rose-100 border border-rose-300 flex items-center justify-center text-[11px]">🎀</span> Coquette Nơ
+                        </button>
+                        <button type="button" onclick="setTheme('manga', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-white border-2 border-black flex items-center justify-center text-[9px] text-black font-black">💥</span> Truyện Manga
+                        </button>
+
+                        <!-- Nhóm Gradient & Thiên Nhiên -->
+                        <button type="button" onclick="setTheme('sunset', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-gradient-to-br from-amber-300 via-pink-400 to-purple-500"></span> Hoàng Hôn
+                        </button>
+                        <button type="button" onclick="setTheme('aurora', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-300 via-cyan-400 to-blue-600"></span> Cực Quang
+                        </button>
+                        <button type="button" onclick="setTheme('pastel', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-gradient-to-r from-pink-300 via-yellow-200 to-sky-300"></span> Cầu Vồng
+                        </button>
+                        <button type="button" onclick="setTheme('sky', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-gradient-to-b from-sky-400 to-indigo-200 flex items-center justify-center text-[10px]">☁️</span> Mây & Sao
+                        </button>
+
+                        <!-- Nhóm Họa tiết & Tạp chí -->
+                        <button type="button" onclick="setTheme('gingham', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-pink-200 border-2 border-dashed border-pink-500"></span> Caro Y2K
+                        </button>
+                        <button type="button" onclick="setTheme('cow', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-amber-50 border border-amber-300 flex items-center justify-center text-[10px]">🐮</span> Bò Sữa
+                        </button>
+                        <button type="button" onclick="setTheme('film', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-neutral-900 border border-amber-500 flex items-center justify-center text-[10px]">🎞️</span> Film 35mm
+                        </button>
+                        <button type="button" onclick="setTheme('magazine', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-stone-200 border border-stone-500 flex items-center justify-center text-[9px] text-black font-serif font-bold">V</span> Tạp Chí
+                        </button>
+
+                        <!-- Nhóm Nghệ thuật & Lễ hội -->
+                        <button type="button" onclick="setTheme('newspaper', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-[#e8e1d1] border border-stone-500 flex items-center justify-center text-[10px]">📰</span> Báo Cổ Điển
+                        </button>
+                        <button type="button" onclick="setTheme('tarot', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-indigo-950 border border-amber-400 flex items-center justify-center text-[10px]">🔮</span> Bài Tarot
+                        </button>
+                        <button type="button" onclick="setTheme('retro', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-gradient-to-r from-orange-400 via-rose-500 to-indigo-600"></span> Sọc Retro 90s
+                        </button>
+                        <button type="button" onclick="setTheme('galaxy', this)" class="theme-btn p-2 rounded-xl bg-zinc-800/40 border border-zinc-800 flex flex-col items-center gap-1 text-[11px] font-semibold text-zinc-300">
+                            <span class="w-6 h-6 rounded-full bg-indigo-950 border border-purple-400 flex items-center justify-center text-[10px]">🦋</span> Galaxy Bướm
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 3. Chân khung, Phông chữ, Mã QR & Số lượt chụp -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div>
+                        <label class="block text-xs font-semibold text-zinc-400 mb-1">3. Dòng chữ kỷ niệm chân khung</label>
+                        <input type="text" id="footer-text-input" value="LIFE4CUTS • SEOUL STUDIO" maxlength="28" oninput="updateFooterConfig()"
+                            class="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-700 text-sm text-white focus:outline-none focus:border-pink-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-zinc-400 mb-1">4. Kiểu chữ & Mã in chân khung</label>
+                        <div class="flex gap-2">
+                            <select id="footer-font-select" onchange="updateFooterConfig()" class="flex-1 px-3 py-2.5 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white focus:outline-none">
+                                <option value="Inter">Hiện đại (Sans)</option>
+                                <option value="Caveat">Viết tay (Handwriting)</option>
+                                <option value="Playfair Display">Báo chí (Serif)</option>
+                                <option value="VT323">Pixel Retro</option>
+                            </select>
+                            <select id="footer-code-select" onchange="updateFooterConfig()" class="px-3 py-2.5 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white focus:outline-none">
+                                <option value="qr">Mã QR</option>
+                                <option value="barcode">Barcode</option>
+                                <option value="none">Không mã</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Số lượt chụp -->
+                <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs font-semibold text-zinc-400">Số lượt chụp:</span>
+                        <button type="button" onclick="setShotCount(4, this)" class="shot-btn active px-3 py-1.5 rounded-xl bg-pink-600 text-white text-xs font-bold">4 tấm (Chuẩn)</button>
+                        <button type="button" onclick="setShotCount(6, this)" class="shot-btn px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-300 text-xs font-bold">6 tấm (Chọn 4)</button>
+                    </div>
+                </div>
+
+                <!-- Nút sang Bước 2 (Kích hoạt camera theo thao tác chạm di động) -->
+                <button type="button" onclick="enterCameraBooth()"
+                    class="w-full py-4 rounded-2xl bg-gradient-to-r from-pink-600 via-rose-500 to-amber-500 hover:brightness-110 active:scale-[0.99] text-white font-black text-sm sm:text-base shadow-lg shadow-pink-600/30 transition flex items-center justify-center gap-2">
+                    <span>📸 VÀO BUỒNG CHỤP TỰ ĐỘNG</span>
+                </button>
+            </div>
+
+            <!-- Cột phải: Xem trước mẫu khung trực tiếp -->
+            <div class="lg:col-span-5 bg-zinc-900/60 border border-zinc-800 rounded-3xl p-4 sm:p-6 flex flex-col items-center justify-center">
+                <span class="text-xs font-semibold text-zinc-400 mb-3">Xem trước khung ảnh mẫu</span>
+                <div class="p-3 bg-zinc-950/80 rounded-2xl border border-zinc-800 shadow-2xl">
+                    <canvas id="step1-preview-canvas" class="max-h-[420px] w-auto rounded-lg shadow-lg"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== BƯỚC 2: BUỒNG CHỤP CỬ CHỈ TỰ ĐỘNG ==================== -->
+        <section id="step-2" class="hidden space-y-4">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                <!-- Khung Camera chính -->
+                <div class="lg:col-span-8 space-y-3">
+                    <div class="relative w-full aspect-[4/3] sm:aspect-video bg-zinc-950 rounded-3xl overflow-hidden border-2 border-zinc-800 shadow-2xl">
+                        <!-- Video ẩn làm nguồn cấp dữ liệu (chuẩn iOS Safari & Android Chrome) -->
+                        <video id="input-video" playsinline webkit-playsinline muted autoplay class="hidden"></video>
+                        <!-- Canvas hiển thị camera + khung xương bàn tay -->
+                        <canvas id="camera-canvas" class="w-full h-full object-cover mirror-canvas"></canvas>
+
+                        <!-- Lớp phủ trạng thái & hướng dẫn trên góc -->
+                        <div class="absolute top-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 z-10">
+                            <div id="gesture-badge" class="px-3.5 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-pink-500/40 text-xs sm:text-sm font-bold text-pink-200 flex items-center gap-2">
+                                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                                <span id="gesture-label">Đang khởi động camera...</span>
+                            </div>
+
+                            <div class="flex items-center gap-1.5">
+                                <button type="button" onclick="switchCameraFacing()" class="px-3 py-1.5 rounded-full bg-black/75 hover:bg-zinc-800 backdrop-blur-md border border-zinc-700 text-xs font-bold text-white">
+                                    🔄 Đổi Cam
+                                </button>
+                                <button type="button" onclick="toggleSkeleton()" id="skeleton-btn" class="px-3 py-1.5 rounded-full bg-black/75 hover:bg-zinc-800 backdrop-blur-md border border-zinc-700 text-xs font-bold text-zinc-200">
+                                    🦴 Khung tay: BẬT
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Tiến độ chụp liên hoàn -->
+                        <div class="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2 z-10">
+                            <div class="px-3.5 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-zinc-700 text-xs font-extrabold text-white">
+                                Tiến độ: <span id="shot-progress-text" class="text-pink-400">0 / 4 tấm</span>
+                            </div>
+
+                            <button type="button" onclick="triggerBurstSession()" id="manual-start-btn"
+                                class="px-4 py-2 rounded-full bg-gradient-to-r from-pink-600 to-rose-500 hover:brightness-110 active:scale-95 text-white text-xs sm:text-sm font-extrabold shadow-lg">
+                                ✌️ Bắt đầu chụp ngay
+                            </button>
+                        </div>
+
+                        <!-- Màn hình chờ / Fallback mở camera trên điện thoại -->
+                        <div id="camera-loading-overlay" class="absolute inset-0 bg-zinc-950/95 flex flex-col items-center justify-center p-6 text-center z-20">
+                            <div class="w-12 h-12 rounded-2xl bg-pink-500/20 border border-pink-500/40 flex items-center justify-center text-2xl mb-3 animate-pulse">📷</div>
+                            <h3 id="loading-title" class="text-base font-extrabold text-white mb-1">Đang kết nối Camera...</h3>
+                            <p id="loading-desc" class="text-xs text-zinc-400 max-w-sm mb-4">Vui lòng chọn "Cho phép" (Allow) khi trình duyệt hỏi quyền truy cập máy ảnh.</p>
+                            <button type="button" onclick="startMobileFriendlyCamera(true)"
+                                class="px-5 py-3 rounded-2xl bg-pink-600 hover:bg-pink-500 active:scale-95 text-white text-xs sm:text-sm font-extrabold shadow-lg">
+                                📷 Bấm để bật Camera ngay
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Thanh chọn bộ lọc màu trực tiếp -->
+                    <div class="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
+                        <span class="text-xs font-bold text-zinc-400">Bộ lọc màu (Filter):</span>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button type="button" onclick="setFilter('none', this)" class="filter-btn active px-3 py-1.5 rounded-xl bg-pink-600 text-white text-xs font-bold">Gốc tự nhiên</button>
+                            <button type="button" onclick="setFilter('beauty', this)" class="filter-btn px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-300 text-xs font-bold">✨ Sáng mịn Hàn</button>
+                            <button type="button" onclick="setFilter('bw', this)" class="filter-btn px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-300 text-xs font-bold">🖤 B&W Photoism</button>
+                            <button type="button" onclick="setFilter('warm', this)" class="filter-btn px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-300 text-xs font-bold">🎞️ Film Ấm</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cột phải: Khay ảnh vừa chụp -->
+                <div class="lg:col-span-4 bg-zinc-900/80 border border-zinc-800 rounded-3xl p-4 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-extrabold text-white">Ảnh đã chụp trong phiên</h3>
+                        <button type="button" onclick="resetCapturedPhotos()" class="text-xs text-rose-400 hover:underline font-semibold">Chụp lại từ đầu</button>
+                    </div>
+                    <p class="text-xs text-zinc-400">Giơ 2 ngón tay chữ ✌️ giữ 0.5 giây, máy sẽ tự đếm ngược và chụp liên hoàn toàn bộ lượt.</p>
+
+                    <div id="captured-thumbs-grid" class="grid grid-cols-2 gap-2.5 min-h-[220px] bg-zinc-950/60 p-2.5 rounded-2xl border border-zinc-800/80">
+                        <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-zinc-500 text-xs">
+                            Chưa có ảnh nào.<br>Giơ 2 ngón tay ✌️ trước camera để bắt đầu!
+                        </div>
+                    </div>
+
+                    <button type="button" onclick="goToStep(3)" id="to-step3-btn" disabled
+                        class="w-full py-3.5 rounded-2xl bg-zinc-800 text-zinc-500 font-extrabold text-xs sm:text-sm transition disabled:cursor-not-allowed">
+                        Tiếp tục chọn & trang trí ảnh ›
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== BƯỚC 3: CHỌN ẢNH, ĐỔI KHUNG & DÁN STICKER ==================== -->
+        <section id="step-3" class="hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                <!-- Cột trái: Khung xem trước tương tác (Kéo thả Sticker) -->
+                <div class="lg:col-span-5 flex flex-col items-center bg-zinc-900/80 border border-zinc-800 rounded-3xl p-4 sm:p-5">
+                    <div class="w-full flex items-center justify-between mb-2">
+                        <span class="text-xs font-bold text-pink-400">👆 Chạm & kéo sticker trên khung</span>
+                        <label class="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
+                            <input type="checkbox" id="double-strip-toggle" onchange="renderFinalCanvas()" class="accent-pink-500 rounded">
+                            <span>In 2 dải song song</span>
+                        </label>
+                    </div>
+
+                    <div class="p-2.5 bg-zinc-950 rounded-2xl border border-zinc-800 shadow-2xl max-w-full overflow-hidden">
+                        <canvas id="final-edit-canvas" class="max-h-[520px] w-auto rounded-lg cursor-grab active:cursor-grabbing touch-none"></canvas>
+                    </div>
+
+                    <!-- Điều khiển Sticker đang chọn -->
+                    <div id="sticker-controls" class="w-full mt-3 p-2.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2">
+                        <span class="text-xs text-zinc-400">Sticker: <strong id="selected-sticker-label" class="text-white">Chưa chọn</strong></span>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" onclick="transformSelectedSticker(0.15, 0)" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-bold">➕ To</button>
+                            <button type="button" onclick="transformSelectedSticker(-0.15, 0)" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-bold">➖ Nhỏ</button>
+                            <button type="button" onclick="transformSelectedSticker(0, 15)" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-bold">↻ Xoay</button>
+                            <button type="button" onclick="deleteSelectedSticker()" class="px-2.5 py-1 rounded-lg bg-rose-600/80 hover:bg-rose-600 text-xs font-bold text-white">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cột phải: Chọn ô ảnh, đổi 20 khung & kho Sticker -->
+                <div class="lg:col-span-7 space-y-4">
+                    <!-- Chọn ảnh điền vào khung -->
+                    <div class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-xs font-bold text-zinc-300 uppercase tracking-wider">1. Chọn ảnh điền vào khung (Bấm để bật/tắt)</h3>
+                            <span id="slot-count-badge" class="text-xs font-bold text-pink-400">Đã chọn 4/4</span>
+                        </div>
+                        <div id="step3-photo-selector" class="grid grid-cols-3 sm:grid-cols-6 gap-2"></div>
+                    </div>
+
+                    <!-- Đổi mẫu khung nhanh -->
+                    <div class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4">
+                        <h3 class="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2.5">2. Đổi nhanh 20 mẫu khung</h3>
+                        <div class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1" id="step3-theme-list">
+                            <button type="button" onclick="changeThemeInStep3('white')" class="px-2.5 py-1.5 rounded-lg bg-white text-black text-[11px] font-bold">Trắng</button>
+                            <button type="button" onclick="changeThemeInStep3('black')" class="px-2.5 py-1.5 rounded-lg bg-zinc-950 text-white border border-zinc-700 text-[11px] font-bold">Đen</button>
+                            <button type="button" onclick="changeThemeInStep3('haru')" class="px-2.5 py-1.5 rounded-lg bg-sky-200 text-sky-950 text-[11px] font-bold">Haru Xanh</button>
+                            <button type="button" onclick="changeThemeInStep3('dontlookup')" class="px-2.5 py-1.5 rounded-lg bg-red-600 text-white text-[11px] font-bold">Đỏ High-Angle</button>
+                            <button type="button" onclick="changeThemeInStep3('receipt')" class="px-2.5 py-1.5 rounded-lg bg-stone-100 text-zinc-900 border border-dashed border-zinc-500 text-[11px] font-mono font-bold">Hóa Đơn</button>
+                            <button type="button" onclick="changeThemeInStep3('chrome')" class="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-zinc-300 via-white to-slate-400 text-zinc-900 text-[11px] font-bold">Y2K Chrome</button>
+                            <button type="button" onclick="changeThemeInStep3('coquette')" class="px-2.5 py-1.5 rounded-lg bg-rose-100 text-rose-800 text-[11px] font-bold">🎀 Coquette</button>
+                            <button type="button" onclick="changeThemeInStep3('manga')" class="px-2.5 py-1.5 rounded-lg bg-white text-black border-2 border-black text-[11px] font-black">💥 Manga</button>
+                            <button type="button" onclick="changeThemeInStep3('sunset')" class="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-300 to-pink-400 text-zinc-900 text-[11px] font-bold">Hoàng Hôn</button>
+                            <button type="button" onclick="changeThemeInStep3('aurora')" class="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-emerald-300 to-blue-500 text-zinc-950 text-[11px] font-bold">Cực Quang</button>
+                            <button type="button" onclick="changeThemeInStep3('pastel')" class="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-pink-300 via-yellow-200 to-sky-300 text-zinc-900 text-[11px] font-bold">Cầu Vồng</button>
+                            <button type="button" onclick="changeThemeInStep3('sky')" class="px-2.5 py-1.5 rounded-lg bg-sky-300 text-sky-950 text-[11px] font-bold">☁️ Mây Sao</button>
+                            <button type="button" onclick="changeThemeInStep3('gingham')" class="px-2.5 py-1.5 rounded-lg bg-pink-200 text-pink-950 text-[11px] font-bold">Caro Y2K</button>
+                            <button type="button" onclick="changeThemeInStep3('cow')" class="px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-950 text-[11px] font-bold">🐮 Bò Sữa</button>
+                            <button type="button" onclick="changeThemeInStep3('film')" class="px-2.5 py-1.5 rounded-lg bg-neutral-900 text-amber-400 border border-amber-500/40 text-[11px] font-bold">🎞️ Film 35mm</button>
+                            <button type="button" onclick="changeThemeInStep3('magazine')" class="px-2.5 py-1.5 rounded-lg bg-stone-200 text-stone-900 text-[11px] font-bold">Tạp Chí</button>
+                            <button type="button" onclick="changeThemeInStep3('newspaper')" class="px-2.5 py-1.5 rounded-lg bg-[#e8e1d1] text-stone-900 text-[11px] font-serif font-bold">📰 Báo Xưa</button>
+                            <button type="button" onclick="changeThemeInStep3('tarot')" class="px-2.5 py-1.5 rounded-lg bg-indigo-950 text-amber-300 border border-amber-400/50 text-[11px] font-bold">🔮 Tarot</button>
+                            <button type="button" onclick="changeThemeInStep3('retro')" class="px-2.5 py-1.5 rounded-lg bg-orange-500 text-white text-[11px] font-bold">Retro 90s</button>
+                            <button type="button" onclick="changeThemeInStep3('galaxy')" class="px-2.5 py-1.5 rounded-lg bg-indigo-950 text-purple-200 text-[11px] font-bold">🦋 Galaxy</button>
+                        </div>
+                    </div>
+
+                    <!-- Kho Sticker & Tem dán Gen Z -->
+                    <div class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4 space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-xs font-bold text-zinc-300 uppercase tracking-wider">3. Dán Sticker & Tem Gen Z</h3>
+                            <button type="button" onclick="clearAllStickers()" class="text-[11px] text-zinc-400 hover:text-rose-400">Xóa hết sticker</button>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button type="button" onclick="addSticker('💖')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">💖</button>
+                            <button type="button" onclick="addSticker('✨')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">✨</button>
+                            <button type="button" onclick="addSticker('🎀')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">🎀</button>
+                            <button type="button" onclick="addSticker('👑')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">👑</button>
+                            <button type="button" onclick="addSticker('🧸')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">🧸</button>
+                            <button type="button" onclick="addSticker('🦋')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">🦋</button>
+                            <button type="button" onclick="addSticker('🐰')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">🐰</button>
+                            <button type="button" onclick="addSticker('🍒')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">🍒</button>
+                            <button type="button" onclick="addSticker('🕶️')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">🕶️</button>
+                            <button type="button" onclick="addSticker('✌️')" class="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-lg">✌️</button>
+                            <button type="button" onclick="addBadgeSticker('BESTIE 4EVER', '#ec4899')" class="px-2.5 py-1.5 rounded-xl bg-pink-600 text-white text-[11px] font-black">BESTIE 4EVER</button>
+                            <button type="button" onclick="addBadgeSticker('SEOUL 2026', '#111827')" class="px-2.5 py-1.5 rounded-xl bg-zinc-950 border border-zinc-600 text-white text-[11px] font-black">SEOUL 2026</button>
+                            <button type="button" onclick="addBadgeSticker('CUTEoverload!', '#f59e0b')" class="px-2.5 py-1.5 rounded-xl bg-amber-500 text-black text-[11px] font-black">CUTE!</button>
+                        </div>
+                    </div>
+
+                    <!-- Nút In Ảnh Ngay -->
+                    <div class="flex flex-col sm:flex-row gap-2.5 pt-1">
+                        <button type="button" onclick="goToStep(2)" class="px-5 py-3.5 rounded-2xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs sm:text-sm font-bold">
+                            ‹ Chụp lại
+                        </button>
+                        <button type="button" onclick="startPrintingProcess()"
+                            class="flex-1 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:brightness-110 active:scale-[0.99] text-zinc-950 font-black text-sm sm:text-base shadow-lg shadow-emerald-500/25 transition flex items-center justify-center gap-2">
+                            <span>🖨️ XÁC NHẬN & TỰ ĐỘNG IN ẢNH NGAY</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== BƯỚC 4: KHE MÁY IN PHOTOBOOTH & XUẤT FILE ==================== -->
+        <section id="step-4" class="hidden max-w-2xl mx-auto text-center space-y-5">
+            <div class="bg-zinc-900/90 border border-zinc-800 rounded-3xl p-5 sm:p-8 shadow-2xl">
+                <span class="inline-block px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-400 text-xs font-bold mb-2">HOÀN TẤT IN ẤN</span>
+                <h2 class="text-xl sm:text-2xl font-black text-white mb-1">Ảnh của bạn đang trượt ra từ khe máy!</h2>
+                <p class="text-xs sm:text-sm text-zinc-400 mb-6">Hộp thoại máy in sẽ tự động mở, hoặc bạn có thể tải trực tiếp file PNG chất lượng cao về điện thoại.</p>
+
+                <!-- Khe máy in mô phỏng -->
+                <div class="relative mx-auto max-w-sm">
+                    <div class="h-5 bg-zinc-950 rounded-full border-2 border-zinc-700 shadow-inner flex items-center justify-center">
+                        <div class="w-4/5 h-1.5 bg-black rounded-full"></div>
+                    </div>
+                    <div class="overflow-hidden pt-1 pb-4 flex justify-center">
+                        <div id="print-area" class="printing-slide bg-white p-1.5 rounded-lg shadow-[0_20px_50px_rgba(0,0,0,0.85)]">
+                            <img id="final-print-img" src="" alt="Ảnh Photobooth đã in" class="max-h-[440px] w-auto rounded">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Các nút hành động sau in -->
+                <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
+                    <button type="button" onclick="window.print()"
+                        class="px-5 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-xs sm:text-sm shadow-lg flex items-center gap-2">
+                        <span>🖨️ In lại qua máy in</span>
+                    </button>
+                    <button type="button" onclick="downloadFinalImage()"
+                        class="px-5 py-3 rounded-2xl bg-pink-600 hover:bg-pink-500 text-white font-extrabold text-xs sm:text-sm shadow-lg flex items-center gap-2">
+                        <span>⬇️ Tải ảnh PNG về máy</span>
+                    </button>
+                    <button type="button" onclick="startNewSession()"
+                        class="px-5 py-3 rounded-2xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs sm:text-sm">
+                        🔄 Chụp phiên mới
+                    </button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        // ==================== TRẠNG THÁI ỨNG DỤNG ====================
+        const state = {
+            currentStep: 1,
+            layout: 'strip4',       // 'strip4' | 'grid2x2' | 'wide2'
+            theme: 'white',
+            footerText: 'LIFE4CUTS • SEOUL STUDIO',
+            footerFont: 'Inter',
+            footerCode: 'qr',       // 'qr' | 'barcode' | 'none'
+            totalShots: 4,
+            filter: 'none',         // 'none' | 'beauty' | 'bw' | 'warm'
+            showSkeleton: true,
+            facingMode: 'user',     // 'user' (trước) | 'environment' (sau)
+            currentStream: null,
+            aiLoopStarted: false,
+            handsInstance: null,
+
+            // Trạng thái chụp liên hoàn
+            isBurstRunning: false,
+            isCountingDown: false,
+            vSignHoldStart: 0,
+            capturedPhotos: [],     // Mảng DataURL ảnh đã chụp
+            selectedIndices: [],    // Chỉ số các ảnh được chọn đưa vào khung
+
+            // Sticker tương tác trên Canvas
+            stickers: [],
+            selectedStickerId: null,
+            isDraggingSticker: false,
+            dragOffsetX: 0,
+            dragOffsetY: 0
+        };
+
+        // Tham chiếu phần tử DOM (được gán trong bindDomElements)
+        let videoElement = null;
+        let canvasElement = null;
+        let canvasCtx = null;
+        let loadingOverlay = null;
+        let gestureLabel = null;
+        let step1PreviewCanvas = null;
+        let finalEditCanvas = null;
+
+        function bindDomElements() {
+            videoElement = document.getElementById('input-video');
+            canvasElement = document.getElementById('camera-canvas');
+            if (canvasElement) {
+                canvasCtx = canvasElement.getContext('2d');
+            }
+            loadingOverlay = document.getElementById('camera-loading-overlay');
+            gestureLabel = document.getElementById('gesture-label');
+            step1PreviewCanvas = document.getElementById('step1-preview-canvas');
+            finalEditCanvas = document.getElementById('final-edit-canvas');
+        }
+
+        // ==================== ÂM THANH TỔNG HỢP (WEB AUDIO API) ====================
+        let audioCtx = null;
+        function ensureAudioCtx() {
+            if (!audioCtx) {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                if (AudioContextClass) audioCtx = new AudioContextClass();
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playBeep(freq = 880, duration = 0.12) {
+            try {
+                ensureAudioCtx();
+                if (!audioCtx) return;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch (e) {}
+        }
+
+        function playShutterSound() {
+            try {
+                ensureAudioCtx();
+                if (!audioCtx) return;
+                const bufferSize = audioCtx.sampleRate * 0.12;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioCtx.sampleRate * 0.03));
+                }
+                const noise = audioCtx.createBufferSource();
+                noise.buffer = buffer;
+                const gain = audioCtx.createGain();
+                gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+                noise.connect(gain);
+                gain.connect(audioCtx.destination);
+                noise.start();
+            } catch (e) {}
+        }
+
+        function playPrinterSound() {
+            try {
+                ensureAudioCtx();
+                if (!audioCtx) return;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(140, audioCtx.currentTime);
+                osc.frequency.linearRampToValueAtTime(195, audioCtx.currentTime + 1.8);
+                gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 2.0);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 2.0);
+            } catch (e) {}
+        }
+
+        // ==================== THÔNG BÁO TOAST ====================
+        let toastTimer = null;
+        function showToast(msg) {
+            const box = document.getElementById('toast-box');
+            const textEl = document.getElementById('toast-msg');
+            if (!box || !textEl) return;
+            textEl.innerText = msg;
+            box.classList.remove('opacity-0', 'translate-y-4');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                box.classList.add('opacity-0', 'translate-y-4');
+            }, 2600);
+        }
+
+        // ==================== ĐIỀU HƯỚNG 4 BƯỚC ====================
+        function goToStep(stepNum) {
+            if (stepNum === 3 && state.capturedPhotos.length === 0) {
+                showToast('Bạn cần chụp ít nhất 1 tấm ảnh trước khi trang trí!');
+                return;
+            }
+            state.currentStep = stepNum;
+
+            for (let i = 1; i <= 4; i++) {
+                const sec = document.getElementById(`step-${i}`);
+                const nav = document.getElementById(`nav-step-${i}`);
+                if (sec) sec.classList.toggle('hidden', i !== stepNum);
+                if (nav) {
+                    if (i === stepNum) {
+                        nav.className = 'px-2.5 py-1.5 rounded-full bg-pink-600 text-white transition';
+                    } else {
+                        nav.className = 'px-2.5 py-1.5 rounded-full bg-zinc-800 text-zinc-400 transition';
+                    }
+                }
+            }
+
+            if (stepNum === 1) {
+                updateStep1Preview();
+            } else if (stepNum === 2) {
+                updateShotProgressUI();
+                startMobileFriendlyCamera(false);
+            } else if (stepNum === 3) {
+                prepareStep3Editor();
+            }
+        }
+
+        function enterCameraBooth() {
+            // Yêu cầu camera được kích hoạt từ thao tác chạm của người dùng.
+            ensureAudioCtx();
+            goToStep(2);
+        }
+
+        // ==================== BƯỚC 1: CẤU HÌNH KHUNG ====================
+        function setLayout(layout, btn) {
+            state.layout = layout;
+            document.querySelectorAll('.layout-btn').forEach(b => {
+                b.classList.remove('active', 'ring-2', 'ring-pink-500', 'bg-zinc-800');
+                b.classList.add('bg-zinc-800/40');
+            });
+            if (btn) {
+                btn.classList.add('active', 'ring-2', 'ring-pink-500', 'bg-zinc-800');
+                btn.classList.remove('bg-zinc-800/40');
+            }
+            updateStep1Preview();
+        }
+
+        function setTheme(theme, btn) {
+            state.theme = theme;
+            document.querySelectorAll('.theme-btn').forEach(b => {
+                b.classList.remove('active', 'ring-2', 'ring-pink-500', 'bg-zinc-800/80');
+                b.classList.add('bg-zinc-800/40');
+            });
+            if (btn) {
+                btn.classList.add('active', 'ring-2', 'ring-pink-500', 'bg-zinc-800/80');
+                btn.classList.remove('bg-zinc-800/40');
+            }
+            updateStep1Preview();
+        }
+
+        function updateFooterConfig() {
+            const txt = document.getElementById('footer-text-input');
+            const font = document.getElementById('footer-font-select');
+            const code = document.getElementById('footer-code-select');
+            if (txt) state.footerText = txt.value || 'K-PHOTOBOOTH';
+            if (font) state.footerFont = font.value;
+            if (code) state.footerCode = code.value;
+            updateStep1Preview();
+        }
+
+        function setShotCount(count, btn) {
+            state.totalShots = count;
+            document.querySelectorAll('.shot-btn').forEach(b => {
+                b.classList.remove('active', 'bg-pink-600', 'text-white');
+                b.classList.add('bg-zinc-800', 'text-zinc-300');
+            });
+            if (btn) {
+                btn.classList.add('active', 'bg-pink-600', 'text-white');
+                btn.classList.remove('bg-zinc-800', 'text-zinc-300');
+            }
+            updateShotProgressUI();
+        }
+
+        function updateStep1Preview() {
+            if (!step1PreviewCanvas) return;
+            const slotsNeeded = state.layout === 'wide2' ? 2 : 4;
+            const dummyPhotos = Array(slotsNeeded).fill(null);
+            renderPhotoboothToCanvas(step1PreviewCanvas, dummyPhotos, false, true);
+        }
+
+        // ==================== BỘ LỌC MÀU CAMERA ====================
+        function setFilter(filterName, btn) {
+            state.filter = filterName;
+            document.querySelectorAll('.filter-btn').forEach(b => {
+                b.classList.remove('active', 'bg-pink-600', 'text-white');
+                b.classList.add('bg-zinc-800', 'text-zinc-300');
+            });
+            if (btn) {
+                btn.classList.add('active', 'bg-pink-600', 'text-white');
+                btn.classList.remove('bg-zinc-800', 'text-zinc-300');
+            }
+        }
+
+        function getCssFilter(filterName) {
+            if (filterName === 'beauty') return 'brightness(1.08) contrast(1.03) saturate(1.12)';
+            if (filterName === 'bw') return 'grayscale(1) contrast(1.22) brightness(1.05)';
+            if (filterName === 'warm') return 'sepia(0.24) saturate(1.25) contrast(1.06) brightness(1.04)';
+            return 'none';
+        }
+
+        function toggleSkeleton() {
+            state.showSkeleton = !state.showSkeleton;
+            const btn = document.getElementById('skeleton-btn');
+            if (btn) btn.innerText = state.showSkeleton ? '🦴 Khung tay: BẬT' : '🦴 Khung tay: TẮT';
+        }
+
+        // ==================== NHẬN DIỆN CỬ CHỈ 2 NGÓN TAY CHỮ V ====================
+        function isPeaceSign(landmarks) {
+            if (!landmarks || landmarks.length < 21) return false;
+            // Ngón trỏ (8 > 6) và ngón giữa (12 > 10) duỗi thẳng
+            const indexExtended = landmarks[8].y < landmarks[6].y;
+            const middleExtended = landmarks[12].y < landmarks[10].y;
+            // Ngón áp út (16 > 14) và ngón út (20 > 18) gập xuống
+            const ringFolded = landmarks[16].y > landmarks[14].y;
+            const pinkyFolded = landmarks[20].y > landmarks[18].y;
+            // Khoảng cách giữa 2 đầu ngón trỏ và ngón giữa mở rộng hình chữ V
+            const spread = Math.hypot(landmarks[8].x - landmarks[12].x, landmarks[8].y - landmarks[12].y);
+            return indexExtended && middleExtended && ringFolded && pinkyFolded && spread > 0.04;
+        }
+
+        function onHandsResults(results) {
+            if (!canvasElement || !canvasCtx || !videoElement) return;
+            if (loadingOverlay && !loadingOverlay.classList.contains('hidden')) {
+                loadingOverlay.classList.add('hidden');
+            }
+
+            if (canvasElement.width !== videoElement.videoWidth && videoElement.videoWidth > 0) {
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+            }
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.filter = getCssFilter(state.filter);
+            canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.filter = 'none';
+
+            let detectedV = false;
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    if (state.showSkeleton && typeof drawConnectors === 'function' && typeof HAND_CONNECTIONS !== 'undefined') {
+                        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#ec4899', lineWidth: 3 });
+                        drawLandmarks(canvasCtx, landmarks, { color: '#fde047', lineWidth: 1, radius: 3 });
+                    }
+                    if (isPeaceSign(landmarks)) {
+                        detectedV = true;
+                    }
+                }
+            }
+            canvasCtx.restore();
+
+            // Xử lý kích hoạt phiên chụp khi giơ 2 ngón tay chữ V
+            if (!state.isBurstRunning && !state.isCountingDown && state.currentStep === 2) {
+                if (detectedV) {
+                    if (state.vSignHoldStart === 0) state.vSignHoldStart = performance.now();
+                    const elapsed = performance.now() - state.vSignHoldStart;
+                    if (gestureLabel) gestureLabel.innerText = `✌️ Giữ nguyên tư thế... (${Math.min(100, Math.round(elapsed / 5))}%)`;
+                    if (elapsed >= 500) {
+                        state.vSignHoldStart = 0;
+                        triggerBurstSession();
+                    }
+                } else {
+                    state.vSignHoldStart = 0;
+                    if (gestureLabel) gestureLabel.innerText = 'Sẵn sàng! Giơ 2 ngón tay ✌️ để tự động chụp';
+                }
+            }
+        }
+
+        // ==================== PHIÊN CHỤP LIÊN HOÀN TỰ ĐỘNG ====================
+        function updateShotProgressUI() {
+            const prog = document.getElementById('shot-progress-text');
+            if (prog) prog.innerText = `${state.capturedPhotos.length} / ${state.totalShots} tấm`;
+
+            const toStep3 = document.getElementById('to-step3-btn');
+            if (toStep3) {
+                if (state.capturedPhotos.length > 0) {
+                    toStep3.disabled = false;
+                    toStep3.className = 'w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-600 to-rose-500 text-white font-extrabold text-xs sm:text-sm shadow-lg transition cursor-pointer';
+                } else {
+                    toStep3.disabled = true;
+                    toStep3.className = 'w-full py-3.5 rounded-2xl bg-zinc-800 text-zinc-500 font-extrabold text-xs sm:text-sm transition cursor-not-allowed';
+                }
+            }
+        }
+
+        function resetCapturedPhotos() {
+            state.capturedPhotos = [];
+            state.selectedIndices = [];
+            state.isBurstRunning = false;
+            state.isCountingDown = false;
+            renderCapturedThumbs();
+            updateShotProgressUI();
+            showToast('Đã xóa ảnh cũ, sẵn sàng chụp lại!');
+        }
+
+        async function triggerBurstSession() {
+            if (state.isBurstRunning || state.isCountingDown) return;
+            ensureAudioCtx();
+
+            if (state.capturedPhotos.length >= state.totalShots) {
+                state.capturedPhotos = [];
+                renderCapturedThumbs();
+            }
+
+            state.isBurstRunning = true;
+            const startBtn = document.getElementById('manual-start-btn');
+            if (startBtn) startBtn.disabled = true;
+
+            while (state.capturedPhotos.length < state.totalShots && state.currentStep === 2) {
+                const currentNum = state.capturedPhotos.length + 1;
+                if (gestureLabel) gestureLabel.innerText = `📸 Chuẩn bị tấm ${currentNum} / ${state.totalShots}...`;
+                await runCountdown(3);
+                captureSingleFrame();
+                await new Promise(r => setTimeout(r, 650));
+            }
+
+            state.isBurstRunning = false;
+            if (startBtn) startBtn.disabled = false;
+
+            if (state.capturedPhotos.length >= state.totalShots) {
+                showToast('🎉 Đã chụp xong! Đang chuyển sang bước trang trí...');
+                setTimeout(() => goToStep(3), 700);
+            }
+        }
+
+        function runCountdown(seconds) {
+            return new Promise(resolve => {
+                state.isCountingDown = true;
+                const overlay = document.getElementById('countdown-overlay');
+                const numEl = document.getElementById('countdown-number');
+                if (overlay) overlay.classList.remove('hidden');
+
+                let count = seconds;
+                if (numEl) numEl.innerText = count;
+                playBeep(750, 0.12);
+
+                const timer = setInterval(() => {
+                    count--;
+                    if (count > 0) {
+                        if (numEl) numEl.innerText = count;
+                        playBeep(750, 0.12);
+                    } else {
+                        clearInterval(timer);
+                        if (overlay) overlay.classList.add('hidden');
+                        state.isCountingDown = false;
+                        resolve();
+                    }
+                }, 850);
+            });
+        }
+
+        function captureSingleFrame() {
+            if (!videoElement || videoElement.videoWidth === 0) return;
+
+            // Hiệu ứng đèn flash + tiếng màn trập
+            const flash = document.getElementById('flash-overlay');
+            if (flash) {
+                flash.classList.remove('flash-effect');
+                void flash.offsetWidth;
+                flash.classList.add('flash-effect');
+            }
+            playShutterSound();
+
+            // Xuất ảnh từ video gốc (lật lại đúng chiều thuận nếu dùng camera trước)
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = videoElement.videoWidth;
+            tempCanvas.height = videoElement.videoHeight;
+            const tCtx = tempCanvas.getContext('2d');
+
+            tCtx.save();
+            tCtx.filter = getCssFilter(state.filter);
+            if (state.facingMode === 'user') {
+                tCtx.translate(tempCanvas.width, 0);
+                tCtx.scale(-1, 1);
+            }
+            tCtx.drawImage(videoElement, 0, 0, tempCanvas.width, tempCanvas.height);
+            tCtx.restore();
+
+            const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.92);
+            state.capturedPhotos.push(dataUrl);
+            renderCapturedThumbs();
+            updateShotProgressUI();
+        }
+
+        function renderCapturedThumbs() {
+            const grid = document.getElementById('captured-thumbs-grid');
+            if (!grid) return;
+
+            if (state.capturedPhotos.length === 0) {
+                grid.innerHTML = `<div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-zinc-500 text-xs">
+                    Chưa có ảnh nào.<br>Giơ 2 ngón tay ✌️ trước camera để bắt đầu!
+                </div>`;
+                return;
+            }
+
+            grid.innerHTML = state.capturedPhotos.map((src, idx) => `
+                <div class="relative rounded-xl overflow-hidden border border-zinc-700 aspect-[4/3] bg-black">
+                    <img src="${src}" class="w-full h-full object-cover" alt="Ảnh ${idx + 1}">
+                    <span class="absolute top-1.5 left-1.5 px-2 py-0.5 rounded-full bg-black/75 text-[10px] font-extrabold text-pink-400">#${idx + 1}</span>
+                </div>
+            `).join('');
+        }
+
+        // ==================== BƯỚC 3: CHỌN ẢNH, 20 MẪU KHUNG & STICKER ====================
+        function prepareStep3Editor() {
+            const needed = state.layout === 'wide2' ? 2 : 4;
+            state.selectedIndices = [];
+            for (let i = 0; i < Math.min(needed, state.capturedPhotos.length); i++) {
+                state.selectedIndices.push(i);
+            }
+            renderStep3PhotoSelector();
+            renderFinalCanvas();
+        }
+
+        function renderStep3PhotoSelector() {
+            const container = document.getElementById('step3-photo-selector');
+            const badge = document.getElementById('slot-count-badge');
+            const needed = state.layout === 'wide2' ? 2 : 4;
+            if (badge) badge.innerText = `Đã chọn ${state.selectedIndices.length}/${needed}`;
+            if (!container) return;
+
+            container.innerHTML = state.capturedPhotos.map((src, idx) => {
+                const order = state.selectedIndices.indexOf(idx);
+                const isSelected = order !== -1;
+                return `
+                    <button type="button" onclick="togglePhotoSelection(${idx})"
+                        class="relative rounded-xl overflow-hidden aspect-[4/3] border-2 transition ${isSelected ? 'border-pink-500 ring-2 ring-pink-500/40' : 'border-zinc-800 opacity-60'}">
+                        <img src="${src}" class="w-full h-full object-cover" alt="Chọn ${idx + 1}">
+                        ${isSelected ? `<span class="absolute top-1 right-1 w-5 h-5 rounded-full bg-pink-600 text-white text-[10px] font-black flex items-center justify-center">${order + 1}</span>` : ''}
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function togglePhotoSelection(idx) {
+            const needed = state.layout === 'wide2' ? 2 : 4;
+            const pos = state.selectedIndices.indexOf(idx);
+            if (pos !== -1) {
+                state.selectedIndices.splice(pos, 1);
+            } else {
+                if (state.selectedIndices.length >= needed) {
+                    state.selectedIndices.shift();
+                }
+                state.selectedIndices.push(idx);
+            }
+            renderStep3PhotoSelector();
+            renderFinalCanvas();
+        }
+
+        function changeThemeInStep3(theme) {
+            state.theme = theme;
+            renderFinalCanvas();
+        }
+
+        // --- Quản lý Sticker kéo thả trên Canvas ---
+        function addSticker(emoji) {
+            if (!finalEditCanvas) return;
+            const id = Date.now() + Math.random();
+            state.stickers.push({
+                id,
+                type: 'emoji',
+                text: emoji,
+                x: finalEditCanvas.width / 2,
+                y: finalEditCanvas.height / 2,
+                scale: 1.0,
+                rotation: 0
+            });
+            state.selectedStickerId = id;
+            updateStickerControlUI();
+            renderFinalCanvas();
+        }
+
+        function addBadgeSticker(label, bgColor) {
+            if (!finalEditCanvas) return;
+            const id = Date.now() + Math.random();
+            state.stickers.push({
+                id,
+                type: 'badge',
+                text: label,
+                bgColor,
+                x: finalEditCanvas.width / 2,
+                y: finalEditCanvas.height / 2,
+                scale: 1.0,
+                rotation: -6
+            });
+            state.selectedStickerId = id;
+            updateStickerControlUI();
+            renderFinalCanvas();
+        }
+
+        function transformSelectedSticker(deltaScale, deltaRot) {
+            const st = state.stickers.find(s => s.id === state.selectedStickerId);
+            if (!st) {
+                showToast('Hãy chạm vào một sticker trên ảnh trước!');
+                return;
+            }
+            st.scale = Math.max(0.4, Math.min(2.8, st.scale + deltaScale));
+            st.rotation = (st.rotation + deltaRot) % 360;
+            renderFinalCanvas();
+        }
+
+        function deleteSelectedSticker() {
+            if (!state.selectedStickerId) return;
+            state.stickers = state.stickers.filter(s => s.id !== state.selectedStickerId);
+            state.selectedStickerId = null;
+            updateStickerControlUI();
+            renderFinalCanvas();
+        }
+
+        function clearAllStickers() {
+            state.stickers = [];
+            state.selectedStickerId = null;
+            updateStickerControlUI();
+            renderFinalCanvas();
+        }
+
+        function updateStickerControlUI() {
+            const label = document.getElementById('selected-sticker-label');
+            if (!label) return;
+            const st = state.stickers.find(s => s.id === state.selectedStickerId);
+            label.innerText = st ? st.text : 'Chưa chọn';
+        }
+
+        function setupCanvasStickerDrag() {
+            if (!finalEditCanvas) return;
+
+            const getCanvasCoords = (clientX, clientY) => {
+                const rect = finalEditCanvas.getBoundingClientRect();
+                const scaleX = finalEditCanvas.width / rect.width;
+                const scaleY = finalEditCanvas.height / rect.height;
+                return {
+                    x: (clientX - rect.left) * scaleX,
+                    y: (clientY - rect.top) * scaleY
+                };
+            };
+
+            const onPointerDown = (clientX, clientY) => {
+                const pos = getCanvasCoords(clientX, clientY);
+                for (let i = state.stickers.length - 1; i >= 0; i--) {
+                    const st = state.stickers[i];
+                    const hitRadius = 42 * st.scale;
+                    if (Math.hypot(pos.x - st.x, pos.y - st.y) <= hitRadius) {
+                        state.selectedStickerId = st.id;
+                        state.isDraggingSticker = true;
+                        state.dragOffsetX = pos.x - st.x;
+                        state.dragOffsetY = pos.y - st.y;
+                        updateStickerControlUI();
+                        renderFinalCanvas();
+                        return;
+                    }
+                }
+                state.selectedStickerId = null;
+                updateStickerControlUI();
+                renderFinalCanvas();
+            };
+
+            const onPointerMove = (clientX, clientY) => {
+                if (!state.isDraggingSticker || !state.selectedStickerId) return;
+                const pos = getCanvasCoords(clientX, clientY);
+                const st = state.stickers.find(s => s.id === state.selectedStickerId);
+                if (st) {
+                    st.x = pos.x - state.dragOffsetX;
+                    st.y = pos.y - state.dragOffsetY;
+                    renderFinalCanvas();
+                }
+            };
+
+            const onPointerUp = () => {
+                state.isDraggingSticker = false;
+            };
+
+            finalEditCanvas.addEventListener('mousedown', e => onPointerDown(e.clientX, e.clientY));
+            window.addEventListener('mousemove', e => onPointerMove(e.clientX, e.clientY));
+            window.addEventListener('mouseup', onPointerUp);
+
+            finalEditCanvas.addEventListener('touchstart', e => {
+                if (e.touches.length > 0) {
+                    onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+                }
+            }, { passive: true });
+            finalEditCanvas.addEventListener('touchmove', e => {
+                if (state.isDraggingSticker && e.touches.length > 0) {
+                    e.preventDefault();
+                    onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+                }
+            }, { passive: false });
+            window.addEventListener('touchend', onPointerUp);
+        }
+
+        // ==================== ĐỒ HỌA VẼ 20 MẪU KHUNG PHOTOBOOTH ====================
+        function drawThemeBackground(ctx, w, h, theme) {
+            ctx.save();
+            if (theme === 'white') {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, w, h);
+            } else if (theme === 'black') {
+                ctx.fillStyle = '#111113';
+                ctx.fillRect(0, 0, w, h);
+            } else if (theme === 'haru') {
+                const grad = ctx.createLinearGradient(0, 0, 0, h);
+                grad.addColorStop(0, '#bae6fd');
+                grad.addColorStop(0.5, '#e0f2fe');
+                grad.addColorStop(1, '#7dd3fc');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, w, h);
+                ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(10, 10, w - 20, h - 20);
+            } else if (theme === 'dontlookup') {
+                ctx.fillStyle = '#dc2626';
+                ctx.fillRect(0, 0, w, h);
+                ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(12, 12, w - 24, h - 24);
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.font = '900 10px Inter, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText("DON'T LOOK UP • HIGH ANGLE", w / 2, 19);
+            } else if (theme === 'receipt') {
+                ctx.fillStyle = '#fafaf9';
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = '#e7e5e4';
+                for (let x = 0; x < w; x += 14) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0); ctx.lineTo(x + 7, 8); ctx.lineTo(x + 14, 0);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.moveTo(x, h); ctx.lineTo(x + 7, h - 8); ctx.lineTo(x + 14, h);
+                    ctx.fill();
+                }
+                ctx.fillStyle = '#57534e';
+                ctx.font = 'bold 10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('*** PHOTOBOOTH RECEIPT ***', w / 2, 20);
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = '#a8a29e';
+                ctx.beginPath(); ctx.moveTo(16, 25); ctx.lineTo(w - 16, 25); ctx.stroke();
+                ctx.setLineDash([]);
+            } else if (theme === 'chrome') {
+                const grad = ctx.createLinearGradient(0, 0, w, h);
+                grad.addColorStop(0, '#d4d4d8');
+                grad.addColorStop(0.25, '#ffffff');
+                grad.addColorStop(0.5, '#a1a1aa');
+                grad.addColorStop(0.75, '#f4f4f5');
+                grad.addColorStop(1, '#71717a');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '20px sans-serif';
+                ctx.fillText('✦', 14, 24);
+                ctx.fillText('✦', w - 28, h - 75);
+            } else if (theme === 'coquette') {
+                ctx.fillStyle = '#fff1f2';
+                ctx.fillRect(0, 0, w, h);
+                ctx.strokeStyle = '#fda4af';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([6, 4]);
+                ctx.strokeRect(10, 10, w - 20, h - 20);
+                ctx.setLineDash([]);
+                ctx.font = '16px sans-serif';
+                ctx.fillText('🎀', 12, 24);
+                ctx.fillText('🎀', w - 30, 24);
+                ctx.fillText('🦢', 14, h - 82);
+                ctx.fillText('🩰', w - 30, h - 82);
+            } else if (theme === 'manga') {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = 'rgba(0,0,0,0.08)';
+                for (let x = 8; x < w; x += 12) {
+                    for (let y = 8; y < h; y += 12) {
+                        ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fill();
+                    }
+                }
+                ctx.strokeStyle = '#09090b';
+                ctx.lineWidth = 5;
+                ctx.strokeRect(8, 8, w - 16, h - 16);
+                ctx.fillStyle = '#09090b';
+                ctx.font = '900 11px Inter, sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText('ゴゴゴゴ • MANGA VOL.1', w - 16, 22);
+            } else if (theme === 'sunset') {
+                const grad = ctx.createLinearGradient(0, 0, w, h);
+                grad.addColorStop(0, '#fde68a');
+                grad.addColorStop(0.5, '#f472b6');
+                grad.addColorStop(1, '#c084fc');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, w, h);
+            } else if (theme === 'aurora') {
+                const grad = ctx.createLinearGradient(0, 0, w, h);
+                grad.addColorStop(0, '#6ee7b7');
+                grad.addColorStop(0.5, '#38bdf8');
+                grad.addColorStop(1, '#818cf8');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, w, h);
+            } else if (theme === 'pastel') {
+                const grad = ctx.createLinearGradient(0, 0, 0, h);
+                grad.addColorStop(0, '#fbcfe8');
+                grad.addColorStop(0.35, '#fef08a');
+                grad.addColorStop(0.7, '#bae6fd');
+                grad.addColorStop(1, '#ddd6fe');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, w, h);
+            } else if (theme === 'gingham') {
+                ctx.fillStyle = '#fce7f3';
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = 'rgba(244, 114, 182, 0.22)';
+                const size = 24;
+                for (let x = 0; x < w; x += size * 2) ctx.fillRect(x, 0, size, h);
+                for (let y = 0; y < h; y += size * 2) ctx.fillRect(0, y, w, size);
+                ctx.strokeStyle = '#ec4899';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([8, 6]);
+                ctx.strokeRect(10, 10, w - 20, h - 20);
+            } else if (theme === 'sky') {
+                const grad = ctx.createLinearGradient(0, 0, 0, h);
+                grad.addColorStop(0, '#7dd3fc');
+                grad.addColorStop(0.6, '#bae6fd');
+                grad.addColorStop(1, '#e0e7ff');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = 'rgba(255,255,255,0.75)';
+                const clouds = [[25, 22], [w - 35, 35], [20, h * 0.45], [w - 28, h * 0.65], [30, h - 95]];
+                clouds.forEach(([cx, cy]) => {
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+                    ctx.arc(cx + 10, cy - 3, 14, 0, Math.PI * 2);
+                    ctx.arc(cx + 20, cy, 11, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            } else if (theme === 'cow') {
+                ctx.fillStyle = '#fffbeb';
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = '#451a03';
+                const spots = [[15, 18, 16], [w - 22, 40, 20], [12, h * 0.35, 18], [w - 18, h * 0.55, 22], [20, h * 0.75, 15], [w - 25, h - 90, 18]];
+                spots.forEach(([sx, sy, r]) => {
+                    ctx.beginPath();
+                    ctx.ellipse(sx, sy, r, r * 0.7, 0.4, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            } else if (theme === 'film') {
+                ctx.fillStyle = '#18181b';
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = '#f4f4f5';
+                for (let y = 14; y < h - 14; y += 26) {
+                    ctx.fillRect(5, y, 8, 14);
+                    ctx.fillRect(w - 13, y, 8, 14);
+                }
+                ctx.fillStyle = '#f59e0b';
+                ctx.font = 'bold 10px monospace';
+                ctx.fillText('KODAK PORTRA 400', 22, 16);
+                ctx.fillText('35MM • FILM', w - 85, 16);
+            } else if (theme === 'magazine') {
+                ctx.fillStyle = '#f5f5f4';
+                ctx.fillRect(0, 0, w, h);
+                ctx.strokeStyle = '#1c1917';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(8, 8, w - 16, h - 16);
+                ctx.fillStyle = '#1c1917';
+                ctx.font = '900 16px Georgia, serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('VOGUE • STUDIO', w / 2, 23);
+            } else if (theme === 'newspaper') {
+                ctx.fillStyle = '#e8e1d1';
+                ctx.fillRect(0, 0, w, h);
+                ctx.strokeStyle = '#44403c';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(10, 10, w - 20, h - 20);
+                ctx.beginPath(); ctx.moveTo(10, 26); ctx.lineTo(w - 10, 26); ctx.stroke();
+                ctx.fillStyle = '#292524';
+                ctx.font = 'bold 11px Georgia, serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('THE DAILY TIMES • SPECIAL EDITION', w / 2, 22);
+            } else if (theme === 'tarot') {
+                ctx.fillStyle = '#1e1b4b';
+                ctx.fillRect(0, 0, w, h);
+                ctx.strokeStyle = '#fbbf24';
+                ctx.lineWidth = 2.5;
+                ctx.strokeRect(9, 9, w - 18, h - 18);
+                ctx.strokeRect(13, 13, w - 26, h - 26);
+                ctx.fillStyle = '#fbbf24';
+                ctx.font = 'bold 11px Georgia, serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('✦ XVII • THE STAR ✦', w / 2, 23);
+            } else if (theme === 'retro') {
+                ctx.fillStyle = '#fff7ed';
+                ctx.fillRect(0, 0, w, h);
+                const colors = ['#f97316', '#ec4899', '#8b5cf6', '#06b6d4'];
+                colors.forEach((c, i) => {
+                    ctx.fillStyle = c;
+                    ctx.fillRect(0, i * 8, w, 6);
+                    ctx.fillRect(0, h - 8 - i * 8, w, 6);
+                });
+            } else if (theme === 'galaxy') {
+                const grad = ctx.createLinearGradient(0, 0, w, h);
+                grad.addColorStop(0, '#1e1b4b');
+                grad.addColorStop(0.5, '#4c1d95');
+                grad.addColorStop(1, '#312e81');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, w, h);
+                ctx.fillStyle = '#fde047';
+                for (let i = 0; i < 35; i++) {
+                    const sx = (i * 73) % w;
+                    const sy = (i * 137) % h;
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, (i % 2) + 1, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.restore();
+        }
+
+        function isDarkTheme(theme) {
+            return ['black', 'film', 'galaxy', 'dontlookup', 'tarot'].includes(theme);
+        }
+
+        function drawFooterBranding(ctx, x, y, w, h) {
+            const dark = isDarkTheme(state.theme);
+            const textColor = state.theme === 'tarot' ? '#fbbf24' : (dark ? '#ffffff' : '#18181b');
+            const subColor = state.theme === 'tarot' ? 'rgba(251, 191, 36, 0.75)' : (dark ? 'rgba(255,255,255,0.65)' : 'rgba(24,24,27,0.65)');
+
+            ctx.save();
+            ctx.fillStyle = textColor;
+            ctx.textAlign = 'left';
+
+            let fontSize = 18;
+            if (state.footerFont === 'Caveat') fontSize = 24;
+            if (state.footerFont === 'VT323') fontSize = 23;
+            ctx.font = `800 ${fontSize}px "${state.footerFont}", sans-serif`;
+            ctx.fillText(state.footerText, x + 18, y + h * 0.48);
+
+            const today = new Date().toLocaleDateString('vi-VN');
+            ctx.font = '600 11px Inter, sans-serif';
+            ctx.fillStyle = subColor;
+            ctx.fillText(`${today} • K-PHOTOBOOTH AI`, x + 18, y + h * 0.76);
+
+            // Vẽ mã QR hoặc Barcode
+            if (state.footerCode === 'qr') {
+                const qrSize = 42;
+                const qx = x + w - qrSize - 18;
+                const qy = y + (h - qrSize) / 2;
+                ctx.fillStyle = textColor;
+                ctx.strokeStyle = textColor;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(qx, qy, qrSize, qrSize);
+                for (let r = 0; r < 5; r++) {
+                    for (let c = 0; c < 5; c++) {
+                        if ((r * 7 + c * 3) % 2 === 0) {
+                            ctx.fillRect(qx + 5 + c * 6.5, qy + 5 + r * 6.5, 5, 5);
+                        }
+                    }
+                }
+            } else if (state.footerCode === 'barcode') {
+                const bw = 68;
+                const bh = 32;
+                const bx = x + w - bw - 18;
+                const by = y + (h - bh) / 2;
+                ctx.fillStyle = textColor;
+                for (let i = 0; i < bw; i += 4) {
+                    const barW = (i % 8 === 0) ? 2.5 : 1.2;
+                    ctx.fillRect(bx + i, by, barW, bh);
+                }
+            }
+            ctx.restore();
+        }
+
+        function drawImageCover(ctx, img, x, y, w, h) {
+            const imgRatio = img.width / img.height;
+            const boxRatio = w / h;
+            let sx = 0, sy = 0, sw = img.width, sh = img.height;
+            if (imgRatio > boxRatio) {
+                sw = img.height * boxRatio;
+                sx = (img.width - sw) / 2;
+            } else {
+                sh = img.width / boxRatio;
+                sy = (img.height - sh) / 2;
+            }
+            ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+        }
+
+        function loadImageAsync(src) {
+            return new Promise((resolve) => {
+                if (!src) return resolve(null);
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => resolve(null);
+                img.src = src;
+            });
+        }
+
+        async function renderPhotoboothToCanvas(targetCanvas, photoUrls, includeStickers = true, isDummy = false) {
+            if (!targetCanvas) return;
+            const ctx = targetCanvas.getContext('2d');
+            const isDoubleStrip = !isDummy && state.layout === 'strip4' && document.getElementById('double-strip-toggle')?.checked;
+
+            let singleW = 340;
+            let singleH = 920;
+            let slots = [];
+
+            if (state.layout === 'strip4') {
+                singleW = 340;
+                singleH = 920;
+                const padX = state.theme === 'film' ? 24 : 20;
+                const topY = 34;
+                const gap = 14;
+                const slotW = singleW - padX * 2;
+                const slotH = 186;
+                for (let i = 0; i < 4; i++) {
+                    slots.push({ x: padX, y: topY + i * (slotH + gap), w: slotW, h: slotH });
+                }
+            } else if (state.layout === 'grid2x2') {
+                singleW = 540;
+                singleH = 680;
+                const pad = 22;
+                const gap = 14;
+                const slotW = (singleW - pad * 2 - gap) / 2;
+                const slotH = 265;
+                for (let r = 0; r < 2; r++) {
+                    for (let c = 0; c < 2; c++) {
+                        slots.push({ x: pad + c * (slotW + gap), y: 34 + r * (slotH + gap), w: slotW, h: slotH });
+                    }
+                }
+            } else if (state.layout === 'wide2') {
+                singleW = 460;
+                singleH = 680;
+                const pad = 22;
+                const gap = 16;
+                const slotW = singleW - pad * 2;
+                const slotH = 268;
+                for (let i = 0; i < 2; i++) {
+                    slots.push({ x: pad, y: 34 + i * (slotH + gap), w: slotW, h: slotH });
+                }
+            }
+
+            targetCanvas.width = isDoubleStrip ? singleW * 2 : singleW;
+            targetCanvas.height = singleH;
+
+            const loadedImages = await Promise.all(photoUrls.map(url => loadImageAsync(url)));
+
+            const drawSingleStrip = (offsetX) => {
+                ctx.save();
+                ctx.translate(offsetX, 0);
+                drawThemeBackground(ctx, singleW, singleH, state.theme);
+
+                slots.forEach((slot, idx) => {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.roundRect(slot.x, slot.y, slot.w, slot.h, 8);
+                    ctx.clip();
+
+                    const img = loadedImages[idx];
+                    if (img) {
+                        drawImageCover(ctx, img, slot.x, slot.y, slot.w, slot.h);
+                    } else {
+                        ctx.fillStyle = isDarkTheme(state.theme) ? '#27272a' : '#e4e4e7';
+                        ctx.fillRect(slot.x, slot.y, slot.w, slot.h);
+                        ctx.fillStyle = isDarkTheme(state.theme) ? '#71717a' : '#a1a1aa';
+                        ctx.font = 'bold 14px Inter, sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(`ẢNH #${idx + 1}`, slot.x + slot.w / 2, slot.y + slot.h / 2 + 5);
+                    }
+                    ctx.restore();
+                });
+
+                const footerH = 88;
+                drawFooterBranding(ctx, 0, singleH - footerH, singleW, footerH);
+                ctx.restore();
+            };
+
+            drawSingleStrip(0);
+            if (isDoubleStrip) {
+                drawSingleStrip(singleW);
+                // Đường đứt nét cắt đôi giữa 2 dải
+                ctx.save();
+                ctx.setLineDash([6, 6]);
+                ctx.strokeStyle = '#9ca3af';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(singleW, 0);
+                ctx.lineTo(singleW, singleH);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Vẽ Sticker lên trên cùng
+            if (includeStickers && state.stickers.length > 0) {
+                state.stickers.forEach(st => {
+                    ctx.save();
+                    ctx.translate(st.x, st.y);
+                    ctx.rotate((st.rotation * Math.PI) / 180);
+                    ctx.scale(st.scale, st.scale);
+
+                    if (st.type === 'emoji') {
+                        ctx.font = '44px sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(st.text, 0, 0);
+                    } else if (st.type === 'badge') {
+                        ctx.font = '900 14px Inter, sans-serif';
+                        const tw = ctx.measureText(st.text).width + 20;
+                        ctx.fillStyle = st.bgColor || '#ec4899';
+                        ctx.beginPath();
+                        ctx.roundRect(-tw / 2, -14, tw, 28, 14);
+                        ctx.fill();
+                        ctx.fillStyle = '#ffffff';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(st.text, 0, 1);
+                    }
+
+                    // Viền chọn khi đang chỉnh sửa
+                    if (st.id === state.selectedStickerId) {
+                        ctx.strokeStyle = '#ec4899';
+                        ctx.lineWidth = 2;
+                        ctx.setLineDash([4, 3]);
+                        ctx.strokeRect(-32, -26, 64, 52);
+                    }
+                    ctx.restore();
+                });
+            }
+        }
+
+        function renderFinalCanvas() {
+            if (!finalEditCanvas) return;
+            const urls = state.selectedIndices.map(idx => state.capturedPhotos[idx]);
+            renderPhotoboothToCanvas(finalEditCanvas, urls, true, false);
+        }
+
+        // ==================== BƯỚC 4: TỰ ĐỘNG IN & XUẤT FILE PNG ====================
+        async function startPrintingProcess() {
+            // Bỏ viền chọn sticker trước khi xuất bản in sạch đẹp
+            state.selectedStickerId = null;
+            updateStickerControlUI();
+            const urls = state.selectedIndices.map(idx => state.capturedPhotos[idx]);
+            await renderPhotoboothToCanvas(finalEditCanvas, urls, true, false);
+
+            const finalDataUrl = finalEditCanvas.toDataURL('image/png', 1.0);
+            const printImg = document.getElementById('final-print-img');
+            if (printImg) {
+                printImg.src = finalDataUrl;
+            }
+
+            goToStep(4);
+            playPrinterSound();
+
+            // Kích hoạt lại hiệu ứng trượt khe máy in
+            const printArea = document.getElementById('print-area');
+            if (printArea) {
+                printArea.classList.remove('printing-slide');
+                void printArea.offsetWidth;
+                printArea.classList.add('printing-slide');
+            }
+
+            // Tự động gọi lệnh in của trình duyệt sau khi ảnh trượt ra xong
+            setTimeout(() => {
+                try {
+                    window.print();
+                } catch (e) {}
+            }, 2300);
+        }
+
+        function downloadFinalImage() {
+            const printImg = document.getElementById('final-print-img');
+            if (!printImg || !printImg.src) return;
+            const link = document.createElement('a');
+            link.download = `K-Photobooth-${Date.now()}.png`;
+            link.href = printImg.src;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast('✅ Đã tải ảnh Photobooth về máy!');
+        }
+
+        function startNewSession() {
+            state.capturedPhotos = [];
+            state.selectedIndices = [];
+            state.stickers = [];
+            state.selectedStickerId = null;
+            goToStep(1);
+        }
+
+        // ==================== KHỞI TẠO CAMERA CHUẨN ĐIỆN THOẠI & AI ====================
+        let fallbackStreamActive = false;
+        let cameraRequestInProgress = false;
+
+        function startFallbackCameraLoop() {
+            if (fallbackStreamActive) return;
+            fallbackStreamActive = true;
+            const renderFallback = () => {
+                if (!fallbackStreamActive || !canvasElement || !canvasCtx || !videoElement) return;
+                if (videoElement.readyState >= 2 && videoElement.videoWidth > 0) {
+                    if (loadingOverlay && !loadingOverlay.classList.contains('hidden')) {
+                        loadingOverlay.classList.add('hidden');
+                    }
+                    if (canvasElement.width !== videoElement.videoWidth) {
+                        canvasElement.width = videoElement.videoWidth;
+                        canvasElement.height = videoElement.videoHeight;
+                    }
+                    canvasCtx.save();
+                    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                    canvasCtx.filter = getCssFilter(state.filter);
+                    canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+                    canvasCtx.filter = 'none';
+                    canvasCtx.restore();
+                }
+                requestAnimationFrame(renderFallback);
+            };
+            requestAnimationFrame(renderFallback);
+        }
+
+        async function switchCameraFacing() {
+            state.facingMode = (state.facingMode === 'user') ? 'environment' : 'user';
+            if (canvasElement) {
+                if (state.facingMode === 'user') canvasElement.classList.add('mirror-canvas');
+                else canvasElement.classList.remove('mirror-canvas');
+            }
+            await startMobileFriendlyCamera(true);
+            showToast(state.facingMode === 'user' ? 'Đã chuyển sang Camera trước' : 'Đã chuyển sang Camera sau');
+        }
+
+        async function startMobileFriendlyCamera(forceRestart = false) {
+            if (!videoElement || cameraRequestInProgress) return;
+
+            if (state.currentStream && !forceRestart &&
+                state.currentStream.getVideoTracks().some(track => track.readyState === 'live') &&
+                videoElement.readyState >= 2) {
+                if (loadingOverlay) loadingOverlay.classList.add('hidden');
+                return;
+            }
+
+            const titleEl = document.getElementById('loading-title');
+            const descEl = document.getElementById('loading-desc');
+            const showCameraMessage = (title, description) => {
+                if (titleEl) titleEl.innerText = title;
+                if (descEl) descEl.innerText = description;
+                if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+            };
+
+            if (!window.isSecureContext &&
+                location.hostname !== 'localhost' &&
+                location.hostname !== '127.0.0.1') {
+                showCameraMessage(
+                    '⚠️ Trang web chưa có HTTPS',
+                    'Điện thoại chặn camera khi mở file HTML trực tiếp hoặc qua HTTP. Hãy đăng trang web lên một địa chỉ HTTPS (ví dụ GitHub Pages hoặc Netlify), sau đó mở bằng Safari/Chrome.'
+                );
+                return;
+            }
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showCameraMessage(
+                    '⚠️ Trình duyệt không hỗ trợ Camera',
+                    'Hãy mở trang HTTPS bằng Safari mới nhất trên iPhone hoặc Chrome mới nhất trên Android. Tránh mở trong trình duyệt mini của Zalo/Facebook.'
+                );
+                return;
+            }
+
+            cameraRequestInProgress = true;
+            showCameraMessage(
+                '📷 Đang chờ cấp quyền Camera...',
+                'Khi trình duyệt hỏi quyền truy cập máy ảnh, hãy chọn Cho phép (Allow). Nếu không thấy thông báo, hãy kiểm tra quyền Camera của trang web trong cài đặt trình duyệt.'
+            );
+
+            try {
+                if (state.currentStream) {
+                    state.currentStream.getTracks().forEach(track => track.stop());
+                    state.currentStream = null;
+                }
+                fallbackStreamActive = false;
+
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        audio: false,
+                        video: {
+                            facingMode: { ideal: state.facingMode },
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        }
+                    });
+                } catch (firstErr) {
+                    // Không thử xin quyền lần hai nếu người dùng đã từ chối.
+                    if (['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(firstErr.name)) {
+                        throw firstErr;
+                    }
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                }
+
+                state.currentStream = stream;
+                videoElement.setAttribute('playsinline', '');
+                videoElement.setAttribute('webkit-playsinline', '');
+                videoElement.autoplay = true;
+                videoElement.muted = true;
+                videoElement.srcObject = stream;
+
+                await new Promise((resolve, reject) => {
+                    if (videoElement.readyState >= 1 && videoElement.videoWidth > 0) {
+                        resolve();
+                        return;
+                    }
+                    const cleanup = () => {
+                        videoElement.removeEventListener('loadedmetadata', onLoaded);
+                        videoElement.removeEventListener('error', onError);
+                    };
+                    const onLoaded = () => { cleanup(); resolve(); };
+                    const onError = () => { cleanup(); reject(new Error('Không thể đọc dữ liệu hình ảnh từ camera.')); };
+                    videoElement.addEventListener('loadedmetadata', onLoaded, { once: true });
+                    videoElement.addEventListener('error', onError, { once: true });
+                    setTimeout(() => {
+                        if (videoElement.videoWidth > 0) { cleanup(); resolve(); }
+                    }, 1500);
+                });
+
+                await videoElement.play();
+                if (loadingOverlay) loadingOverlay.classList.add('hidden');
+                startFallbackCameraLoop();
+
+                if (typeof Hands !== 'undefined' && !state.aiLoopStarted) {
+                    state.aiLoopStarted = true;
+                    state.handsInstance = new Hands({
+                        locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+                    });
+                    state.handsInstance.setOptions({
+                        maxNumHands: 1,
+                        modelComplexity: 0,
+                        minDetectionConfidence: 0.6,
+                        minTrackingConfidence: 0.55
+                    });
+                    state.handsInstance.onResults(results => {
+                        fallbackStreamActive = false;
+                        onHandsResults(results);
+                    });
+
+                    let isProcessingFrame = false;
+                    const processVideoFrame = async () => {
+                        if (videoElement && videoElement.readyState >= 2 &&
+                            videoElement.videoWidth > 0 && !isProcessingFrame &&
+                            state.currentStep === 2) {
+                            isProcessingFrame = true;
+                            try {
+                                await state.handsInstance.send({ image: videoElement });
+                            } catch (err) {
+                                startFallbackCameraLoop();
+                            } finally {
+                                isProcessingFrame = false;
+                            }
+                        }
+                        requestAnimationFrame(processVideoFrame);
+                    };
+                    requestAnimationFrame(processVideoFrame);
+                }
+
+                if (gestureLabel) gestureLabel.innerText = 'Sẵn sàng! Giơ 2 ngón tay ✌️ để bắt đầu';
+            } catch (err) {
+                console.error('Camera error:', err);
+                let message = 'Không thể truy cập Camera. ';
+                if (['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(err.name)) {
+                    message += 'Quyền Camera đang bị chặn. Hãy mở cài đặt trang web cạnh thanh địa chỉ, đặt Camera thành Cho phép (Allow), rồi tải lại trang.';
+                } else if (['NotFoundError', 'DevicesNotFoundError'].includes(err.name)) {
+                    message += 'Không tìm thấy camera trên thiết bị.';
+                } else if (['NotReadableError', 'TrackStartError'].includes(err.name)) {
+                    message += 'Camera có thể đang được ứng dụng khác sử dụng. Hãy đóng ứng dụng đó rồi thử lại.';
+                } else if (err.name === 'OverconstrainedError') {
+                    message += 'Camera không hỗ trợ cấu hình yêu cầu. Hãy thử lại hoặc đổi camera.';
+                } else {
+                    message += (err.message || err.name || 'Hãy kiểm tra quyền Camera của trình duyệt.');
+                }
+                showCameraMessage('⚠️ Chưa mở được Camera', message);
+                if (gestureLabel) gestureLabel.innerText = 'Camera chưa sẵn sàng';
+            } finally {
+                cameraRequestInProgress = false;
+            }
+        }
+
+        async function initApp() {
+            bindDomElements();
+            setupCanvasStickerDrag();
+            updateStep1Preview();
+            // Chỉ mở camera sau thao tác chạm của người dùng trên điện thoại.
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initApp);
+        } else {
+            initApp();
+        }
+    </script>
+</body>
+</html>
